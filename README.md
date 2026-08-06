@@ -270,7 +270,7 @@ $$\Delta_{\%} = 100 \cdot \frac{p_{\text{factura}} - p_{\text{catalogo}}}{p_{\te
 
 | Estado | Condition |
 |---|---|
-| `CRITICO` | `|Δ%| > 40` |
+| `CRITICO` | `abs(Δ%) > 40` |
 | `SOBREPRECIO` | `Δ_USD >= 0.10` |
 | `AHORRO` | `Δ_USD < -1000` |
 | `SIMILAR` | otherwise |
