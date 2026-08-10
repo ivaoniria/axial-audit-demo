@@ -23,4 +23,4 @@ click en cualquiera para abrirla a resolución completa.
 
 ![Axial Audit — 10](demo%20%2810%29.png)
 
-![Axial Audit — 12](demo%20%2812%29.png)
+![Axial Audit — 11](demo%20%2811%29.png)
