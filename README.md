@@ -10,7 +10,7 @@
 ---
 
 <img width="1280" height="720" alt="axial-audit" src="https://github.com/user-attachments/assets/1324fa61-f748-4413-bfae-65dee4ae0b70" />
-<img width="1280" height="608" alt="axial-audit (1)" src="https://github.com/user-attachments/assets/f32d2fab-a499-462d-861f-da82c4b2c7e1" />
+<img width="1280" height="608" alt="axial-audit" src="https://github.com/user-attachments/assets/c0d7ed53-ac06-4b2d-aec6-b5a67b6d6f0a" />
 <img width="1280" height="608" alt="axial-audit (2)" src="https://github.com/user-attachments/assets/46593b5f-7596-4eb7-be16-b098a3c07453" />
 
 ---
