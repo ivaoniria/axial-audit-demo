@@ -48,10 +48,10 @@ This path is the architectural showcase (documentation + diagrams + assets).
 ### Walkthrough (100% mocked data)
 
 <p align="center">
-  <img width="900" alt="Scan a supplier invoice — camera, file upload or QR from a phone" src="assets/demo%20(1).png" />
-  <img width="900" alt="History of scanned invoice batches" src="assets/demo%20(5).png" />
-  <img width="900" alt="Pending catalog mappings — link each scan to a catalog product (MatchCache)" src="assets/demo%20(3).png" />
-  <img width="900" alt="Auditing in progress overlay" src="assets/demo%20(8).png" />
+  <img width="900" alt="Scan a supplier invoice — camera, file upload or QR from a phone" src="assets/demo%20(01).png" />
+  <img width="900" alt="History of scanned invoice batches" src="assets/demo%20(05).png" />
+  <img width="900" alt="Pending catalog mappings — link each scan to a catalog product (MatchCache)" src="assets/demo%20(03).png" />
+  <img width="900" alt="Auditing in progress overlay" src="assets/demo%20(08).png" />
 </p>
 
 ---
