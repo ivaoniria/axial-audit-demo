@@ -1,4 +1,4 @@
-# Axial Audit — Hybrid Catalog-Matching Engine
+# Axial Audit — Hybrid Catalog - Matching Engine
 
 > **Enterprise-Grade Data Pipeline — A high-performance, cost-optimized processing funnel merging deterministic NLP heuristics with selective Google Gemini arbitration.**
 
@@ -44,15 +44,6 @@ The **Gemini Engine Module** implements a **hybrid funnel**: four deterministic 
 *Conservative stress-tested nominal rate after $\pm 5\%$ false-positive penalty on the NLP stage: **$80.12\%$** (same $2{,}533$-line corpus).*
 
 This path is the architectural showcase (documentation + diagrams + assets).
-
-### Walkthrough (100% mocked data)
-
-<p align="center">
-  <img width="900" alt="Scan a supplier invoice — camera, file upload or QR from a phone" src="assets/demo%20(01).png" />
-  <img width="900" alt="History of scanned invoice batches" src="assets/demo%20(05).png" />
-  <img width="900" alt="Pending catalog mappings — link each scan to a catalog product (MatchCache)" src="assets/demo%20(03).png" />
-  <img width="900" alt="Auditing in progress overlay" src="assets/demo%20(08).png" />
-</p>
 
 ---
 
