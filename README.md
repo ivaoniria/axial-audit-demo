@@ -17,7 +17,7 @@
 
 ## Executive Summary
 
-**Axial Audit** is a B2B invoice-auditing platform that reconciles unstructured invoice line items—typically produced by noisy OCR and supplier-specific abbreviations—against an internal **Catalogo Maestro** of **12,000+** reference products.
+**Axial Audit** is a B2B invoice-auditing platform that reconciles unstructured invoice line items—typically produced by noisy OCR and supplier-specific abbreviations—against an internal **Catalogo Maestro** of **11,000+** reference products.
 
 The **Gemini Engine Module** implements a **hybrid funnel**: four deterministic layers process the majority of lines at **$0** marginal API cost; **Google Gemini 2.5 Flash** performs selective semantic arbitration on the residual tail when local ranking has already produced candidates.
 
@@ -45,7 +45,14 @@ The **Gemini Engine Module** implements a **hybrid funnel**: four deterministic 
 
 This path is the architectural showcase (documentation + diagrams + assets).
 
-![Axial Audit — demo walkthrough (mocked data)](assets/demo.gif)
+### Walkthrough (100% mocked data)
+
+<p align="center">
+  <img width="900" alt="Scan a supplier invoice — camera, file upload or QR from a phone" src="assets/demo%20(1).png" />
+  <img width="900" alt="History of scanned invoice batches" src="assets/demo%20(5).png" />
+  <img width="900" alt="Pending catalog mappings — link each scan to a catalog product (MatchCache)" src="assets/demo%20(3).png" />
+  <img width="900" alt="Auditing in progress overlay" src="assets/demo%20(8).png" />
+</p>
 
 ---
 
@@ -85,6 +92,18 @@ Axial Audit ingests supplier invoices (PDF/image), extracts line items via Gemin
 | **Core stable (Layers 1–3)** | **Deployed in production** | Dedup `O(N)`, blacklists, waterfall, `SHORT_WHITELIST`, `STOP_WORDS`, **`minLen >= 3`**, dynamic score floor, gramaje gate |
 | **Oracle (Layer 4)** | **Deployed** (selective) | Top-5 Flash JSON arbitration |
 | **Layer 3+ evolution** | **Roadmap** | `fuzzball`, total pack mass, unit-price ratio fusion |
+
+### Product capabilities (beyond the matching engine)
+
+The engine is the technical core, but the deployed product is a full operator workflow around it:
+
+- **MatchCache — persistent cross-batch learning.** Every mapping an operator confirms between a scanned line and a catalog product is stored per-supplier (signature `firmaProducto`) and **auto-applied to future invoices**, so a correction made once becomes a permanent automatic match. The **Bandeja de Mapeos** surfaces confirmed mappings and the ones still pending review.
+- **Multi-supplier batch + scout grouping.** A batch of many invoice pages is grouped **by CUIT read from each image**, so each supplier's invoice is audited under its own rules — even when everything is uploaded together.
+- **Per-supplier rules (`ProveePrompt`).** Each supplier can carry its own extraction prompt, waterfall priorities, blacklists and business rules.
+- **Mobile QR upload.** Scan a QR to add photos from a phone into the current batch — designed for multi-page invoices captured on the spot.
+- **Catálogo Maestro sync.** The reference catalog syncs daily from **Access → Google Sheets → MongoDB**; the *Catálogo Access* view lets the operator confirm at a glance that costs were refreshed.
+- **Manual mapping, exclusions & OCR correction.** Operators can map/unmap, exclude non-product lines (freight, promos, percepciones), and fix OCR errors (internal code / barcode / description / price) inline, each triggering a re-audit.
+- **Financial estado semaphore.** Every line is classified `SIMILAR` / `SOBREPRECIO` / `AHORRO` / `CRITICO` / `NO_ENCONTRADO` / `EXCLUIDO` for fast triage.
 
 ### The Architectural Solution — The Hybrid Funnel
 
@@ -219,7 +238,7 @@ case 'codigoInterno': {
 
 Retention rule per token $t$:
 
-$$\text{keep}(t) \iff \big(|t| \geq 3 \lor t \in \text{SHORT\_WHITELIST}\big) \land \neg\text{stop}(t)$$
+$$\text{keep}(t) \iff \big(|t| \geq 3 \lor t \in \text{SHORT-WHITELIST}\big) \land \neg\,\text{stop}(t)$$
 
 #### 3.2 Prefix sovereignty — the `minLen \geq 3` rule · **PRODUCTION**
 
@@ -264,21 +283,23 @@ where $W_H$ is the tokenized catalog description. The syllable-truncation design
 
 #### 3.4 Gramaje / pack gate · **PRODUCTION**
 
-Normalized mass/volume compatibility with tolerance:
+Normalized mass/volume compatibility with a 15% tolerance ($\tau_g = 0.15$):
 
-$$\frac{|\,g_i - g_c\,|}{\max(g_i, g_c)} \leq \tau_g, \quad \tau_g = 0.15 \quad (15\%)$$
+$$\frac{|\,g_i - g_c\,|}{\max(g_i, g_c)} \leq \tau_g$$
 
 plus absolute slack bands on $g$ (see `gramajesNormalizadosCompatibles`). When $g_i$ or $g_c$ is unextractable, the gate **defers** (does not reject) — documented limitation in [Section 5](#53-problem-3--quantity--pack-normalization--roadmap).
 
 #### 3.5 Post-match financial estado · **PRODUCTION**
 
-$$\Delta_{\%} = 100 \cdot \frac{p_{\text{factura}} - p_{\text{catalogo}}}{p_{\text{catalogo}}}$$
+$$\Delta_{\text{pct}} = 100 \cdot \frac{p_{\text{factura}} - p_{\text{catalogo}}}{p_{\text{catalogo}}}$$
+
+Prices are **net-of-VAT amounts in ARS**. Conditions are evaluated **in order** (first match wins):
 
 | Estado | Condition |
 |---|---|
-| `CRITICO` | `abs(Δ%) > 40` |
-| `SOBREPRECIO` | `Δ_USD >= 0.10` |
-| `AHORRO` | `Δ_USD < -1000` |
+| `CRITICO` | `abs(Δ%) > 40` (or catalog price ≤ 0) |
+| `SOBREPRECIO` | `Δ (amount) >= 0.10` — invoice above catalog |
+| `AHORRO` | `Δ% <= -10` — invoice at least 10% cheaper |
 | `SIMILAR` | otherwise |
 
 ---
@@ -385,9 +406,9 @@ stateDiagram-v2
   NO_ENCONTRADO --> [*]
   EXCLUIDO --> [*]
   [*] --> Matched: encontrado=true
-  Matched --> CRITICO: |Δ%| > 40
-  Matched --> SOBREPRECIO: Δ ≥ $0.10
-  Matched --> AHORRO: Δ < −$1000
+  Matched --> CRITICO: abs(Δ%) > 40
+  Matched --> SOBREPRECIO: Δ ≥ 0.10
+  Matched --> AHORRO: Δ% ≤ -10
   Matched --> SIMILAR: otherwise
 ```
 
@@ -445,7 +466,7 @@ via `fuzzball` (`token_set_ratio`, `partial_ratio`, `token_sort_ratio`) on `norm
 
 ### 5.2 Problem 2 — Line price without unit-normalized economics · **ROADMAP**
 
-Production persists **`precioNetoSinIva: number`** and applies $\Delta_{\%}$ vs catalog list price — **correct for ingestion**, insufficient for pack-mismatch economics.
+Production persists **`precioNetoSinIva: number`** and applies $\Delta_{\text{pct}}$ vs catalog list price — **correct for ingestion**, insufficient for pack-mismatch economics.
 
 **Target unit-cost ratio:**
 
@@ -541,7 +562,23 @@ Weights tunable per supplier via `ProveePrompt.backendRules`.
 
 ## License
 
-Documentation © Axial Audit engineering. Implementation licensing follows the parent monorepo policy.
+**Proprietary — All rights reserved.** © 2026 Axial Audit.
+
+This repository is an **architecture showcase**: it contains documentation, diagrams and mocked-data
+screenshots only. **No application source code is distributed here.** Axial Audit is a commercial,
+closed-source product; the implementation lives in a private repository and is **not** covered by any
+open-source license.
+
+- **No grant of rights.** No license is granted to use, copy, modify, redistribute or create
+  derivative works from this material, the described system, or its implementation, except with the
+  prior written permission of the author.
+- **Documentation & assets** (text, diagrams, screenshots) are provided **for evaluation and
+  portfolio purposes only**. All screenshots use **synthetic, non-production data**.
+- **Trademarks & third parties.** "Axial Audit" and its branding are marks of their owner. Product
+  and company names referenced (e.g. Google Gemini, MongoDB, Node.js, React) belong to their
+  respective owners and are used for identification only; no affiliation or endorsement is implied.
+
+For licensing, evaluation access or commercial inquiries, contact the author.
 
 ---
 
