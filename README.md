@@ -1,6 +1,6 @@
 # Axial Audit — Hybrid Catalog - Matching Engine
 
-> **Enterprise-Grade Data Pipeline — A high-performance, cost-optimized processing funnel merging deterministic NLP heuristics with selective Google Gemini arbitration.**
+> **Enterprise-Grade Data Pipeline — A high-performance, cost-optimized processing funnel that turns noisy invoice text into ranked catalog candidates, and turns a single human confirmation into a permanent automatic match.**
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Node.js](https://img.shields.io/badge/Node.js-20-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
@@ -19,9 +19,13 @@
 
 **Axial Audit** is a B2B invoice-auditing platform that reconciles unstructured invoice line items—typically produced by noisy OCR and supplier-specific abbreviations—against an internal **Catalogo Maestro** of **11,000+** reference products.
 
-The **Gemini Engine Module** implements a **hybrid funnel**: four deterministic layers process the majority of lines at **$0** marginal API cost; **Google Gemini 2.5 Flash** performs selective semantic arbitration on the residual tail when local ranking has already produced candidates.
+The **Axial matching engine** implements a **hybrid funnel**: every deterministic layer runs at **$0** marginal API cost and produces, for each invoice line, either an unambiguous catalog hit or a **ranked list of suggested candidates**. The **final match decision is always made by a human operator**, who selects the correct product from that list — the engine never assigns a semantic match on its own.
 
-**Production baseline (stress lot $N = 3{,}327$ lines):** shift-left sanitization, vendor blacklists, and the deployed heuristic NLP core (including the **`minLen \geq 3`** prefix sovereignty rule) lift nominal identity resolution to **$84.34\%$** on **$2{,}533$** sanitized lines. The Flash oracle closes the remaining **$15\text{–}20\%$** semantic gap for **$< \$0.01$** per batch.
+That decision is required **once per product, per supplier**. It is persisted in the **MatchCache** (signature `firmaProducto`) and auto-applied to every future invoice from that supplier, with no second prompt. Price auditing is **not blocked** while mappings are being confirmed: lines already resolved are audited continuously.
+
+**Google Gemini 2.5 Flash participates upstream only**, extracting structured line items from the invoice image/PDF (`GEMINI_SPECIALIST_*`). It takes **no part in catalog matching** — no arbitration, no tie-breaking, no autonomous match resolution.
+
+**Production baseline (stress lot $N = 3{,}327$ lines):** shift-left sanitization, vendor blacklists, and the deployed heuristic NLP core (including the **`minLen \geq 3`** prefix sovereignty rule) resolve **$84.34\%$** of the **$2{,}533$** sanitized lines to a catalog identity with **no operator input**. The residual tail is not a dead end: it reaches the review queue as a ranked candidate list, and in practice the correct product generally appears in that list. Every confirmation is captured by the MatchCache, so the same product is never resolved twice.
 
 **Structural risks still under active engineering** (not conflated with match-rate):
 
@@ -38,10 +42,10 @@ The **Gemini Engine Module** implements a **hybrid funnel**: four deterministic 
     <progress value="71.4" max="100" style="width:250px;"></progress>
 * **Heuristic NLP Core Engine (Prefix Optimization & minLen >= 3):** `[84.34%]`
     <progress value="84.34" max="100" style="width:250px;"></progress>
-* **Hybrid Gemini 2.5 Flash Oracle (Semantic Arbitration Tail):** `[95.0%]`
-    <progress value="95" max="100" style="width:250px;"></progress>
 
 *Conservative stress-tested nominal rate after $\pm 5\%$ false-positive penalty on the NLP stage: **$80.12\%$** (same $2{,}533$-line corpus).*
+
+*Beyond this band there is **no further automatic rate to report**: the remaining lines are resolved by operator confirmation from the suggestion list and then served from the MatchCache. Coverage grows per supplier as mappings accumulate, and is a function of catalog exposure — not of a model score.*
 
 This path is the architectural showcase (documentation + diagrams + assets).
 
@@ -63,7 +67,7 @@ This path is the architectural showcase (documentation + diagrams + assets).
 
 ### Context
 
-Axial Audit ingests supplier invoices (PDF/image), extracts line items via Gemini Specialist extraction upstream, and **audits** each line by locating the corresponding catalog row and comparing net prices. The problem is **high-recall identity resolution** under aggressive text distortion at warehouse scale.
+Axial Audit ingests supplier invoices (PDF/image) and extracts line items via the **Gemini 2.5 Flash Specialist extraction stage** (per-supplier prompt, `ProveePrompt`) — this is the **only** stage where an LLM is involved. Everything downstream — catalog identity resolution and net-price auditing — is deterministic code plus operator confirmation. The problem is **high-recall identity resolution** under aggressive text distortion at warehouse scale.
 
 ### The Core Problem
 
@@ -81,14 +85,14 @@ Axial Audit ingests supplier invoices (PDF/image), extracts line items via Gemin
 | Stratum | Status | Scope |
 |---|---|---|
 | **Core stable (Layers 1–3)** | **Deployed in production** | Dedup `O(N)`, blacklists, waterfall, `SHORT_WHITELIST`, `STOP_WORDS`, **`minLen >= 3`**, dynamic score floor, gramaje gate |
-| **Oracle (Layer 4)** | **Deployed** (selective) | Top-5 Flash JSON arbitration |
+| **Operator confirmation + MatchCache (Layer 4)** | **Deployed** | Ranked top-5 suggestions, human decision, per-supplier `firmaProducto` persistence, auto-apply on all future batches |
 | **Layer 3+ evolution** | **Roadmap** | `fuzzball`, total pack mass, unit-price ratio fusion |
 
 ### Product capabilities (beyond the matching engine)
 
 The engine is the technical core, but the deployed product is a full operator workflow around it:
 
-- **MatchCache — persistent cross-batch learning.** Every mapping an operator confirms between a scanned line and a catalog product is stored per-supplier (signature `firmaProducto`) and **auto-applied to future invoices**, so a correction made once becomes a permanent automatic match. The **Bandeja de Mapeos** surfaces confirmed mappings and the ones still pending review.
+- **MatchCache — confirm once, apply always.** This is the system's real learning mechanism. The deterministic layers *suggest*; the operator *decides*. The moment an operator links a scanned line to a catalog product, the mapping is stored per-supplier under the product signature (`firmaProducto`) and **auto-applied to every future invoice from that supplier** — the question is asked once per product and never again. The learning is deterministic, inspectable and reversible: no model weights, no drift, no silent re-decisions. The **Bandeja de Mapeos** surfaces confirmed mappings and the ones still pending review; unmapping a product invalidates its cache entry and returns the line to the suggestion flow.
 - **Multi-supplier batch + scout grouping.** A batch of many invoice pages is grouped **by CUIT read from each image**, so each supplier's invoice is audited under its own rules — even when everything is uploaded together.
 - **Per-supplier rules (`ProveePrompt`).** Each supplier can carry its own extraction prompt, waterfall priorities, blacklists and business rules.
 - **Mobile QR upload.** Scan a QR to add photos from a phone into the current batch — designed for multi-page invoices captured on the spot.
@@ -98,10 +102,16 @@ The engine is the technical core, but the deployed product is a full operator wo
 
 ### The Architectural Solution — The Hybrid Funnel
 
-Design principle: **push work left, push intelligence right only when necessary**.
+Design principle: **push work left, keep the decision human, and never ask the same question twice**.
 
 ```mermaid
 flowchart TB
+  subgraph L0["Extraction — Gemini 2.5 Flash · PRODUCTION"]
+    IMG[Invoice image / PDF]
+    EXT["Specialist extraction → structured lines"]
+    IMG --> EXT
+  end
+
   subgraph L1["Layer 1 — Shift-Left Sanitization · PRODUCTION"]
     RAW[Raw invoice lines]
     DEDUP["Dedup O(N)"]
@@ -131,20 +141,28 @@ flowchart TB
     ECON[unit price ratio gate]
   end
 
-  subgraph L4["Layer 4 — Gemini Flash · PRODUCTION"]
-    TOP5[Top-5 local candidates]
-    JSON[Structured JSON output]
-    TOP5 --> JSON --> OUT3[Semantic match or fallback]
+  subgraph L4["Layer 4 — Operator Confirmation + MatchCache · PRODUCTION"]
+    CACHE{"MatchCache hit? (firmaProducto)"}
+    TOP5[Top-5 ranked suggestions]
+    OP([Operator picks the correct product])
+    STORE[(Persist mapping per supplier)]
+    CACHE -->|yes| OUT3[Auto-applied match — no prompt]
+    CACHE -->|no| TOP5 --> OP --> STORE --> OUT3
   end
 
+  EXT --> RAW
   BL --> L2
   L2 -->|no exact hit| L3
   L3 -.->|future| L3b
   GAP -->|candidates exist| L4
-  L4 -->|API failure| OUT2
+  OUT1 --> AUD[Price audit → estado]
+  OUT2 --> AUD
+  OUT3 --> AUD
 ```
 
-**Cost model:** Layers 1–3 at **$0/line**; Layer 4 **$< \$0.01$** per **$2{,}500$–line** batch (operational estimate).
+**Cost model:** matching is **$0/line** end-to-end — **no LLM call takes part in it**. The only Gemini spend is the upstream extraction stage, billed per processed invoice document, not per catalog lookup.
+
+**Non-blocking property:** lines pending operator confirmation do not stall the batch. Everything already resolved (code hit, cache hit, or deterministic winner) is audited and classified immediately, so price variance is visible while mapping work is still in progress.
 
 ---
 
@@ -295,22 +313,31 @@ Prices are **net-of-VAT amounts in ARS**. Conditions are evaluated **in order** 
 
 ---
 
-### Layer 4 — Gemini 2.5 Flash Oracle · **PRODUCTION** (selective)
+### Layer 4 — Suggested Candidates & Operator Confirmation (MatchCache) · **PRODUCTION**
 
-Invocation only when Layers 1–3 yield **`NO_ENCONTRADO` / `CRITICO`** with $\geq 1$ ranked local candidate (top $5$). Structured output schema:
+When Layers 1–3 end in **`NO_ENCONTRADO` / `CRITICO`** with $\geq 1$ ranked local candidate, the engine does **not** auto-assign a match. It emits the **top $5$** ranked candidates to the review queue and the **operator selects the correct catalog row**. There is no autonomous arbiter anywhere in this path — the ranking is a suggestion, the human is the decision.
 
-```typescript
-const MATCH_RESOLUTION_SCHEMA = {
-  type: 'object',
-  properties: {
-    matchedCodigoInterno: { type: ['string', 'null'] },
-    confidence: { type: 'number' },
-  },
-  required: ['matchedCodigoInterno', 'confidence'],
-} as const;
+#### Resolution order per line
+
+| Step | Source | Operator involvement |
+|---|---|---|
+| 1 | Layer 2 code hit (`COD_INTERNO` / `COD_BARRAS` / `COD_PROVEEDOR`) | none |
+| 2 | **MatchCache** hit on `firmaProducto` | none — previously confirmed, auto-applied |
+| 3 | Layer 3 deterministic winner above $\text{minScore}_{\text{req}}$ | none |
+| 4 | **Top-5 suggestion list** | **decides — once per product, per supplier** |
+| 5 | No candidate at all | `NO_ENCONTRADO`; manual mapping / OCR correction available |
+
+#### Persistence key
+
+```text
+firmaProducto = {proveePromptId | cuit | vendor}_{cod | SINCOD}_{sanitizedDesc}
 ```
 
-Transient API failures **fall back** to the deterministic Layer 3 outcome (~**$10$** tokens/line output budget).
+The confirmed pair *(signature → `codigoInterno`)* is written once and consulted **before** the description sweep on every subsequent batch, which is why the same product never reaches the review queue twice. Cost of a cache hit is an **$O(1)$** map probe.
+
+#### Suggestion quality
+
+The list is produced by the same deterministic ranking described in §3.3 (`scoreDesc`, alpha gate, gramaje gate, tie-break cascade). **No verified hit-rate figure is published for it**; empirically the correct product generally appears among the suggested candidates, and the residual cases are handled by manual mapping and inline OCR correction, each of which also feeds the MatchCache. Improving the *ordering* of this list — see [Layer 3+](#51-problem-1--discrete-token-hits-vs-continuous-fuzzy-similarity--roadmap) — reduces operator clicks; it does not change who decides.
 
 ---
 
@@ -327,8 +354,8 @@ Stress benchmark: **$N_{\text{raw}} = 3{,}327$** invoice lines (multi-supplier b
 * *(effective lines: 2,533)*
 * **Heuristic NLP Core Engine (Prefix Optimization & minLen >= 3):** `[84.34%]`
     <progress value="84.34" max="100" style="width:250px;"></progress>
-* **Hybrid Gemini 2.5 Flash Oracle (Semantic Arbitration Tail):** `[95.0%]`
-    <progress value="95" max="100" style="width:250px;"></progress>
+
+*Beyond this band there is **no further automatic rate to report**: the remaining lines are resolved by operator confirmation from the suggestion list and then served from the MatchCache.*
 
 ### Quantitative stage table
 
@@ -338,7 +365,7 @@ Stress benchmark: **$N_{\text{raw}} = 3{,}327$** invoice lines (multi-supplier b
 | + Shift-left sanitization & blacklist | `2,533` | **71.4%** | `$0` |
 | + Heuristic NLP (`minLen >= 3`, prefix sovereignty) | `2,533` | **84.34%** | `$0` |
 | Conservative stress (**-5%** FP penalty) | `2,533` | **80.12%** | `$0` |
-| + Gemini 2.5 Flash (tail arbitration only) | `2,533` | **~94–95%** effective | **< $0.01** / batch |
+| Residual tail → ranked suggestions | `~400` | *not an automatic rate* — operator-confirmed, then cached | `$0` |
 
 ### Interpretation
 
@@ -346,9 +373,9 @@ Stress benchmark: **$N_{\text{raw}} = 3{,}327$** invoice lines (multi-supplier b
 |---|---|---|
 | Shift-left | `+7.4` pp | `O(N)` dedup + `EXCLUIDO` blacklists remove noise rows |
 | NLP core | `+12.9` pp | **`minLen >= 3`**, `SHORT_WHITELIST`, dynamic `minScore_req` |
-| Flash tail | `+10–11` pp | Selective oracle on ambiguous top-5 only |
+| Operator + MatchCache | *not a rate* | Human confirmation on the ranked tail; each decision is persisted per supplier and auto-applied thereafter, so unattended coverage rises batch over batch |
 
-Approximately **$80\%$** of economic value is captured by deterministic engineering; Flash is a **surgical disambiguator**, not the primary matcher. Residual operator pain on match **identity** is dominated by economic false alarms — see [Section 5](#section-5-structural-limitations--evolution-roadmap).
+The deterministic engine carries the volume; the operator carries the ambiguity — **once**. The economically relevant metric after the NLP band is therefore **not** a match percentage but **MatchCache coverage per supplier** (confirmed mappings ÷ distinct products seen), which is monotonic: it only grows. Residual operator pain on match **identity** is dominated by economic false alarms — see [Section 5](#section-5-structural-limitations--evolution-roadmap).
 
 ---
 
@@ -372,7 +399,7 @@ backend/src/
 │   ├── auditMatching.service.ts     # auditLine, computeEstado
 │   ├── auditIndex.service.ts        # CatalogoIndex builder
 │   ├── audit.service.ts             # Batch audit orchestrator
-│   └── auditAI.service.ts           # Gemini Flash gateway
+│   └── auditAI.service.ts           # Gemini Specialist gateway — upstream extraction only
 └── models/
     └── resultadoAuditoria.model.ts  # AuditEstado state machine
 ```
@@ -386,7 +413,8 @@ backend/src/
 | `auditScoring.utils.ts` | `scoreDesc`, `minScore_req` | Production |
 | `auditEngine.service.ts` | Candidate cap (`K = 20`), tie-break | Production |
 | `auditWaterfall.service.ts` | Priority routing | Production |
-| `auditAI.service.ts` | JSON oracle, retry fallback | Production |
+| `auditAI.service.ts` | Gemini extraction gateway (no matching role), retry/timeout policy | Production |
+| `firmaProducto.utils.ts` | MatchCache signatures — confirm once, auto-apply | Production |
 
 ### Estado state machine
 
@@ -510,14 +538,14 @@ Weights tunable per supplier via `ProveePrompt.backendRules`.
 
 ---
 
-### 5.6 Relationship to Gemini Layer 4 · **PRODUCTION + ROADMAP**
+### 5.6 Relationship to the operator-confirmation layer · **PRODUCTION + ROADMAP**
 
 | Component | Role |
 |---|---|
 | Layers 1–2 | Unchanged — codes retain early-return sovereignty |
 | Layer 3 (live) | **`minLen >= 3`**, dedup, scoring — unchanged |
-| Layer 3+ (future) | Richer top-5 for Flash input |
-| Layer 4 (live) | Arbitrates **semantic** ties only; must not override pack/`r_u` contradictions once shipped |
+| Layer 3+ (future) | Better-ordered, higher-recall suggestion list — fewer operator clicks, same decision owner |
+| Layer 4 (live) | **Operator decides; MatchCache remembers.** Roadmap gates (pack mass, `r_u`) must be applied to the *suggested candidates* so contradictory rows are demoted or dropped before a human ever sees them |
 
 ---
 
@@ -538,16 +566,17 @@ Weights tunable per supplier via `ProveePrompt.backendRules`.
 
 | Variable | Purpose |
 |---|---|
-| `GEMINI_API_KEY` | Google GenAI credentials for Layer 4 |
-| `GEMINI_MODEL` | Default `gemini-2.5-flash` |
-| `GEMINI_SPECIALIST_*` | Upstream extraction timeouts/retries |
+| `GEMINI_API_KEY` | Google GenAI credentials for the **upstream invoice-extraction** stage |
+| `GEMINI_MODEL` | Default `gemini-2.5-flash` (extraction) |
+| `GEMINI_SPECIALIST_*` | Extraction timeouts / retries |
 
 **Operational guidance:**
 
-- Monitor `metodoMatch` mix (`PATRON_DESC` vs code hits).  
+- Monitor `metodoMatch` mix (`PATRON_DESC` vs code hits vs MatchCache hits).  
+- Track **MatchCache coverage per supplier** — it is the leading indicator of how much manual review the next batch will require.  
 - Track `EXCLUIDO` rate after blacklist edits.  
 - Baseline NLP accuracy expects **`minLen \geq 3`** — do not disable in production without re-benchmarking $N = 3{,}327$.  
-- Alert on Gemini 429/timeout; fallback must preserve Layer 3 outcomes.
+- Alert on Gemini 429/timeout in the **extraction** stage. Matching and auditing are unaffected by it: no LLM participates in them.
 
 ---
 
@@ -573,4 +602,4 @@ For licensing, evaluation access or commercial inquiries, contact the author.
 
 ---
 
-*Production owns precision: $O(N)$ composite dedup, **`minLen \geq 3`**, and heuristic scoring. Evolution owns economics and fuzzy tail recovery. Gemini Flash arbitrates ambiguity — not unit math.*
+*Production owns precision: $O(N)$ composite dedup, **`minLen \geq 3`**, and heuristic scoring. Evolution owns economics and fuzzy tail recovery. The engine suggests, the operator decides, and the MatchCache makes that decision permanent.*
