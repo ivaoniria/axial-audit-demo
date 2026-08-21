@@ -5,7 +5,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 [![Node.js](https://img.shields.io/badge/Node.js-20-339933?style=flat-square&logo=node.js&logoColor=white)](https://nodejs.org)
 [![React](https://img.shields.io/badge/React-19-61DAF8?style=flat-square&logo=react&logoColor=black)](https://react.dev)
-[![Gemini](https://img.shields.io/badge/Google%20Gemini-2.5%20Flash-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev)
+[![Gemini](https://img.shields.io/badge/Google%20Gemini-2.5%20Flash%20%C2%B7%20OCR%20only-4285F4?style=flat-square&logo=google&logoColor=white)](https://ai.google.dev)
 
 ---
 
@@ -19,11 +19,21 @@
 
 **Axial Audit** is a B2B invoice-auditing platform that reconciles unstructured invoice line items—typically produced by noisy OCR and supplier-specific abbreviations—against an internal **Catalogo Maestro** of **11,000+** reference products.
 
-The **Axial matching engine** implements a **hybrid funnel**: every deterministic layer runs at **$0** marginal API cost and produces, for each invoice line, either an unambiguous catalog hit or a **ranked list of suggested candidates**. The **final match decision is always made by a human operator**, who selects the correct product from that list — the engine never assigns a semantic match on its own.
+The **Axial matching engine** implements a **hybrid funnel** — *hybrid* here means **deterministic code + human confirmation**, never AI-assisted matching. Every layer runs at **$0** marginal API cost and produces, for each invoice line, either an unambiguous catalog hit or a **ranked list of suggested candidates**. The **final match decision is always made by a human operator**, who selects the correct product from that list; the engine never auto-assigns a description-based match on its own.
 
 That decision is required **once per product, per supplier**. It is persisted in the **MatchCache** (signature `firmaProducto`) and auto-applied to every future invoice from that supplier, with no second prompt. Price auditing is **not blocked** while mappings are being confirmed: lines already resolved are audited continuously.
 
-**Google Gemini 2.5 Flash participates upstream only**, extracting structured line items from the invoice image/PDF (`GEMINI_SPECIALIST_*`). It takes **no part in catalog matching** — no arbitration, no tie-breaking, no autonomous match resolution.
+**AI usage boundary — read this before anything else:**
+
+| Stage | AI involved? | What runs |
+|---|---|---|
+| Invoice image/PDF → text lines (**OCR**) | **Yes** — Google Gemini 2.5 Flash | Per-supplier extraction prompt (`GEMINI_SPECIALIST_*`) |
+| Catalog matching (Layers 1–3) | **No** | Deterministic waterfall + token scoring, `$0`/line |
+| Candidate suggestion & final match decision (Layer 4) | **No** | Ranked list from local scoring; **a human operator decides** |
+| MatchCache auto-apply | **No** | Exact signature lookup on `firmaProducto` |
+| Price auditing & `estado` classification | **No** | Arithmetic on net prices |
+
+In this program AI is used **exclusively for OCR**. It performs **no arbitration, no tie-breaking, no scoring and no match resolution** — those paths contain no model call of any kind.
 
 **Production baseline (stress lot $N = 3{,}327$ lines):** shift-left sanitization, vendor blacklists, and the deployed heuristic NLP core (including the **`minLen \geq 3`** prefix sovereignty rule) resolve **$84.34\%$** of the **$2{,}533$** sanitized lines to a catalog identity with **no operator input**. The residual tail is not a dead end: it reaches the review queue as a ranked candidate list, and in practice the correct product generally appears in that list. Every confirmation is captured by the MatchCache, so the same product is never resolved twice.
 
@@ -67,7 +77,7 @@ This path is the architectural showcase (documentation + diagrams + assets).
 
 ### Context
 
-Axial Audit ingests supplier invoices (PDF/image) and extracts line items via the **Gemini 2.5 Flash Specialist extraction stage** (per-supplier prompt, `ProveePrompt`) — this is the **only** stage where an LLM is involved. Everything downstream — catalog identity resolution and net-price auditing — is deterministic code plus operator confirmation. The problem is **high-recall identity resolution** under aggressive text distortion at warehouse scale.
+Axial Audit ingests supplier invoices (PDF/image) and reads their line items with the **Gemini 2.5 Flash OCR / extraction stage** (per-supplier prompt, `ProveePrompt`) — **OCR is the only stage where AI is involved anywhere in the product**. Everything downstream — catalog identity resolution and net-price auditing — is deterministic code plus operator confirmation. The problem is **high-recall identity resolution** under aggressive text distortion at warehouse scale.
 
 ### The Core Problem
 
@@ -78,7 +88,7 @@ Axial Audit ingests supplier invoices (PDF/image) and extracts line items via th
 | Pack / unit confusion | `72x55g` vs `2x55g` | Identical tokens, different wholesale semantics |
 | Broken economics | `$ 32.144,43` vs `$ 55,10` as strings | No normalized magnitude comparison |
 | Single-character collisions | Token `a` in `Malbec` (substring) | Unrestricted `startsWith` |
-| Cost at scale | `3,000+` lines × frontier LLM | Unsustainable per batch |
+| Cost at scale | `3,000+` lines × frontier LLM (**rejected approach**) | Unsustainable per batch — matching stays deterministic |
 
 ### Capability strata
 
@@ -102,13 +112,13 @@ The engine is the technical core, but the deployed product is a full operator wo
 
 ### The Architectural Solution — The Hybrid Funnel
 
-Design principle: **push work left, keep the decision human, and never ask the same question twice**.
+Design principle: **push work left, keep the decision human, and never ask the same question twice**. The only AI in the diagram is the **OCR stage (`L0`)** that produces the text lines; everything after it is deterministic code and operator input.
 
 ```mermaid
 flowchart TB
-  subgraph L0["Extraction — Gemini 2.5 Flash · PRODUCTION"]
+  subgraph L0["OCR — Gemini 2.5 Flash · PRODUCTION · only AI stage"]
     IMG[Invoice image / PDF]
-    EXT["Specialist extraction → structured lines"]
+    EXT["OCR extraction → structured text lines"]
     IMG --> EXT
   end
 
@@ -123,7 +133,7 @@ flowchart TB
     CI[Internal code]
     EAN[Barcode / EAN]
     CP[Vendor reference code]
-    DESC[Semantic description pass]
+    DESC["Description pass — local token scoring"]
     CI -->|hit| OUT1[Match + early return]
     EAN -->|hit| OUT1
     CP -->|hit| OUT1
@@ -160,7 +170,7 @@ flowchart TB
   OUT3 --> AUD
 ```
 
-**Cost model:** matching is **$0/line** end-to-end — **no LLM call takes part in it**. The only Gemini spend is the upstream extraction stage, billed per processed invoice document, not per catalog lookup.
+**Cost model:** matching is **$0/line** end-to-end — **no AI/LLM call takes part in it**. The only Gemini spend is the upstream OCR stage, billed per processed invoice document, not per catalog lookup.
 
 **Non-blocking property:** lines pending operator confirmation do not stall the batch. Everything already resolved (code hit, cache hit, or deterministic winner) is audited and classified immediately, so price variance is visible while mapping work is still in progress.
 
@@ -237,7 +247,7 @@ case 'codigoInterno': {
 
 ### Layer 3 — Heuristic NLP Core Engine · **PRODUCTION**
 
-`auditEngine.service.ts` + `auditScoring.utils.ts` + `auditToken.utils.ts` — **no LLM**. This layer is **fully deployed**, including all fragment-collision controls below.
+`auditEngine.service.ts` + `auditScoring.utils.ts` + `auditToken.utils.ts` — **no AI, no LLM, no API call**. This layer is **fully deployed**, including all fragment-collision controls below.
 
 #### 3.1 Tokenization and short-token governance · **PRODUCTION**
 
@@ -315,7 +325,7 @@ Prices are **net-of-VAT amounts in ARS**. Conditions are evaluated **in order** 
 
 ### Layer 4 — Suggested Candidates & Operator Confirmation (MatchCache) · **PRODUCTION**
 
-When Layers 1–3 end in **`NO_ENCONTRADO` / `CRITICO`** with $\geq 1$ ranked local candidate, the engine does **not** auto-assign a match. It emits the **top $5$** ranked candidates to the review queue and the **operator selects the correct catalog row**. There is no autonomous arbiter anywhere in this path — the ranking is a suggestion, the human is the decision.
+When Layers 1–3 end in **`NO_ENCONTRADO` / `CRITICO`** with $\geq 1$ ranked local candidate, the engine does **not** auto-assign a match. It emits the **top $5$** ranked candidates to the review queue and the **operator selects the correct catalog row**. **No AI participates in this step**: the ranking comes from the local scoring of §3.3, and there is no autonomous arbiter anywhere in this path — the ranking is a suggestion, the human is the decision.
 
 #### Resolution order per line
 
@@ -399,7 +409,7 @@ backend/src/
 │   ├── auditMatching.service.ts     # auditLine, computeEstado
 │   ├── auditIndex.service.ts        # CatalogoIndex builder
 │   ├── audit.service.ts             # Batch audit orchestrator
-│   └── auditAI.service.ts           # Gemini Specialist gateway — upstream extraction only
+│   └── auditAI.service.ts           # Gemini OCR gateway — extraction only, never called by matching
 └── models/
     └── resultadoAuditoria.model.ts  # AuditEstado state machine
 ```
@@ -413,7 +423,7 @@ backend/src/
 | `auditScoring.utils.ts` | `scoreDesc`, `minScore_req` | Production |
 | `auditEngine.service.ts` | Candidate cap (`K = 20`), tie-break | Production |
 | `auditWaterfall.service.ts` | Priority routing | Production |
-| `auditAI.service.ts` | Gemini extraction gateway (no matching role), retry/timeout policy | Production |
+| `auditAI.service.ts` | Gemini **OCR** gateway (no matching role), retry/timeout policy | Production |
 | `firmaProducto.utils.ts` | MatchCache signatures — confirm once, auto-apply | Production |
 
 ### Estado state machine
@@ -566,9 +576,9 @@ Weights tunable per supplier via `ProveePrompt.backendRules`.
 
 | Variable | Purpose |
 |---|---|
-| `GEMINI_API_KEY` | Google GenAI credentials for the **upstream invoice-extraction** stage |
-| `GEMINI_MODEL` | Default `gemini-2.5-flash` (extraction) |
-| `GEMINI_SPECIALIST_*` | Extraction timeouts / retries |
+| `GEMINI_API_KEY` | Google GenAI credentials for the **OCR / invoice-extraction** stage (matching never calls it) |
+| `GEMINI_MODEL` | Default `gemini-2.5-flash` (OCR only) |
+| `GEMINI_SPECIALIST_*` | OCR extraction timeouts / retries |
 
 **Operational guidance:**
 
@@ -576,7 +586,7 @@ Weights tunable per supplier via `ProveePrompt.backendRules`.
 - Track **MatchCache coverage per supplier** — it is the leading indicator of how much manual review the next batch will require.  
 - Track `EXCLUIDO` rate after blacklist edits.  
 - Baseline NLP accuracy expects **`minLen \geq 3`** — do not disable in production without re-benchmarking $N = 3{,}327$.  
-- Alert on Gemini 429/timeout in the **extraction** stage. Matching and auditing are unaffected by it: no LLM participates in them.
+- Alert on Gemini 429/timeout in the **OCR** stage. Matching and auditing are unaffected by it: no AI participates in them.
 
 ---
 
